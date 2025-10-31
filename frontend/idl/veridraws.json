@@ -1,0 +1,172 @@
+{
+  "version": "0.1.0",
+  "name": "veridraws",
+  "instructions": [
+    {
+      "name": "createDraw",
+      "accounts": [
+        {
+          "name": "draw",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "creator",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rent",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "ticketPrice",
+          "type": "u64"
+        },
+        {
+          "name": "maxParticipants",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "joinDraw",
+      "accounts": [
+        {
+          "name": "draw",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "participant",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "pickWinner",
+      "accounts": [
+        {
+          "name": "draw",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "creator",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "drawAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "isInitialized",
+            "type": "bool"
+          },
+          {
+            "name": "creator",
+            "type": "publicKey"
+          },
+          {
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "name": "description",
+            "type": "string"
+          },
+          {
+            "name": "ticketPrice",
+            "type": "u64"
+          },
+          {
+            "name": "maxParticipants",
+            "type": "u8"
+          },
+          {
+            "name": "participants",
+            "type": {
+              "vec": "publicKey"
+            }
+          },
+          {
+            "name": "winner",
+            "type": {
+              "option": "publicKey"
+            }
+          },
+          {
+            "name": "isActive",
+            "type": "bool"
+          },
+          {
+            "name": "createdAt",
+            "type": "i64"
+          }
+        ]
+      }
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "DrawNotActive",
+      "msg": "This draw is not active"
+    },
+    {
+      "code": 6001,
+      "name": "DrawFull",
+      "msg": "This draw has reached maximum participants"
+    },
+    {
+      "code": 6002,
+      "name": "NotCreator",
+      "msg": "Only the creator can perform this action"
+    },
+    {
+      "code": 6003,
+      "name": "AlreadyParticipating",
+      "msg": "You are already participating in this draw"
+    },
+    {
+      "code": 6004,
+      "name": "NoParticipants",
+      "msg": "No participants in this draw"
+    }
+  ]
+}
