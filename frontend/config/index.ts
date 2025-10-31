@@ -6,7 +6,7 @@ export const PROGRAM_ID = new PublicKey('11111111111111111111111111111111');
 // You can add more configuration options here as needed
 export const config = {
   // Default RPC endpoint - using a more reliable provider
-  rpcEndpoint: process.env.NEXT_PUBLIC_RPC_ENDPOINT || 'https://solana-devnet.g.alchemy.com/v2/demo',
+  rpcEndpoint: process.env.NEXT_PUBLIC_RPC_ENDPOINT || 'https://api.devnet.solana.com',
   
   // Program-derived address (PDA) seeds
   pda: {

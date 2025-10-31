@@ -12,20 +12,45 @@ if (typeof window !== 'undefined' && !window.Buffer) {
   window.Buffer = require('buffer/').Buffer;
 }
 
+// Extend the Draw type to include the raw account data for type safety
+type DrawAccountType = {
+  publicKey: PublicKey;
+  account: {
+    isInitialized: boolean;
+    creator: PublicKey;
+    name: string;
+    description: string;
+    ticketPrice: BN;
+    maxParticipants: number;
+    participants: PublicKey[];
+    winner: PublicKey | null;
+    isActive: boolean;
+    createdAt: BN;
+    [key: string]: any; // For any additional properties that might come from the chain
+  };
+};
+
 interface DrawContextType {
-  draws: Draw[];
+  draws: DrawAccountType[];
+  myDraws: DrawAccountType[];
+  joinedDraws: DrawAccountType[];
+  availableDraws: DrawAccountType[];
   isLoading: boolean;
   error: string | null;
-  createDraw: (data: CreateDrawData) => Promise<void>;
+  createDraw: (data: CreateDrawData) => Promise<string>;
   joinDraw: (data: JoinDrawData) => Promise<void>;
   pickWinner: (drawAddress: string) => Promise<void>;
   fetchDraws: () => Promise<void>;
+  refreshDraws: () => Promise<void>;
 }
 
 const DrawContext = createContext<DrawContextType | undefined>(undefined);
 
 export const DrawProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [draws, setDraws] = useState<Draw[]>([]);
+  const [draws, setDraws] = useState<DrawAccountType[]>([]);
+  const [myDraws, setMyDraws] = useState<DrawAccountType[]>([]);
+  const [joinedDraws, setJoinedDraws] = useState<DrawAccountType[]>([]);
+  const [availableDraws, setAvailableDraws] = useState<DrawAccountType[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const { publicKey, sendTransaction, wallet } = useWallet();
@@ -96,157 +121,211 @@ export const DrawProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return new Program(idl as any, PROGRAM_ID, provider);
   }, [provider]);
 
-  const fetchDraws = useCallback(async () => {
-    if (!program || !publicKey) {
-      console.log('Program or public key not available');
-      return;
-    }
+  // Categorize draws based on user's relationship to them
+  const refreshDraws = useCallback(async () => {
+    if (!program || !publicKey) return;
     
-    // Reset error state at the start of fetch
-    setError(null);
     setIsLoading(true);
+    setError(null);
     
-    // Add a timeout to prevent hanging
-    const timeout = setTimeout(() => {
-      setError('Request timed out. Please check your connection and try again.');
-      setIsLoading(false);
-      console.error('Fetch draws request timed out');
-    }, 30000); // 30 second timeout
+    const withRetry = async <T,>(fn: () => Promise<T>, retries = 3, delay = 1000): Promise<T> => {
+      try {
+        return await fn();
+      } catch (error) {
+        if (retries <= 0) throw error;
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return withRetry(fn, retries - 1, delay * 2);
+      }
+    };
 
     try {
-      console.log('Fetching draws with program ID:', PROGRAM_ID.toString());
-      
-      // Try to fetch using the program's account method first
-      let drawAccounts;
-      try {
-        console.log('Attempting to fetch draws using program.account...');
-        drawAccounts = await program.account.drawAccount.all();
-        console.log('Successfully fetched', drawAccounts.length, 'draws using program.account');
-      } catch (programError) {
-        console.warn('Error using program.account, falling back to getProgramAccounts:', programError);
-        
-        // Fallback to getProgramAccounts if the first method fails
-        console.log('Attempting fallback method using getProgramAccounts...');
-        const accounts = await connection.getProgramAccounts(
-          new PublicKey(PROGRAM_ID),
-          {
+      // First try the program account method
+      const fetchDraws = async (): Promise<DrawAccountType[]> => {
+        try {
+          const drawAccounts = await program.account.drawAccount.all();
+          return drawAccounts.map(draw => ({
+            publicKey: draw.publicKey,
+            account: {
+              ...draw.account,
+              // Ensure we have all required fields with defaults if missing
+              isInitialized: draw.account.isInitialized ?? true,
+              creator: draw.account.creator ?? PublicKey.default,
+              name: draw.account.name ?? '',
+              description: draw.account.description ?? '',
+              ticketPrice: draw.account.ticketPrice ?? new BN(0),
+              maxParticipants: draw.account.maxParticipants ?? 0,
+              participants: draw.account.participants ?? [],
+              winner: draw.account.winner ?? null,
+              isActive: draw.account.isActive ?? true,
+              createdAt: draw.account.createdAt ?? new BN(0)
+            }
+          }));
+        } catch (error) {
+          console.warn('Failed to fetch draws using program account, falling back to getProgramAccounts');
+          // Fallback to getProgramAccounts if the first method fails
+          const accounts = await connection.getProgramAccounts(program.programId, {
             filters: [
               {
-                dataSize: 165 // Adjust this size based on your account structure
-              }
-            ]
-          }
-        );
-        
-        if (!program.coder) {
-          throw new Error('Program coder not available');
+                dataSize: 200, // Adjust the size according to your account size
+              },
+            ],
+          });
+
+          return accounts.map(({ pubkey, account }) => ({
+            publicKey: pubkey,
+            account: program.coder.accounts.decode('drawAccount', account.data)
+          }));
         }
-        
-        // Decode the accounts manually
-        drawAccounts = accounts.map(account => {
-          try {
-            const decoded = program.coder.accounts.decode('drawAccount', account.account.data);
-            return {
-              publicKey: account.pubkey,
-              account: {
-                ...decoded,
-                // Handle BN conversion for numeric fields
-                ticketPrice: typeof decoded.ticketPrice === 'object' && 'toNumber' in decoded.ticketPrice 
-                  ? decoded.ticketPrice.toNumber() 
-                  : Number(decoded.ticketPrice || 0),
-                maxParticipants: typeof decoded.maxParticipants === 'object' && 'toNumber' in decoded.maxParticipants
-                  ? decoded.maxParticipants.toNumber()
-                  : Number(decoded.maxParticipants || 0),
-                participants: (decoded.participants || []).map((p: any) => new PublicKey(p)),
-                winner: decoded.winner ? new PublicKey(decoded.winner) : null,
-                isActive: Boolean(decoded.isActive),
-                createdAt: typeof decoded.createdAt === 'object' && 'toNumber' in decoded.createdAt
-                  ? decoded.createdAt.toNumber()
-                  : Number(decoded.createdAt || 0),
-              }
-            };
-          } catch (decodeError) {
-            console.error('Error decoding account:', decodeError);
-            return null;
-          }
-        }).filter(Boolean); // Remove any null entries from failed decodes
-        
-        console.log('Successfully fetched', drawAccounts.length, 'draws using getProgramAccounts');
-      }
-      
-      if (!drawAccounts || drawAccounts.length === 0) {
-        console.log('No draw accounts found');
-        setDraws([]);
-        return;
-      }
-      
-      // Process and format the fetched draws
-      const formattedDraws = drawAccounts
-        .filter((draw): draw is { publicKey: PublicKey; account: any } => draw !== null)
-        .map(draw => ({
-          ...draw.account,
-          publicKey: draw.publicKey.toString(),
-        }));
+      };
+
+      const formattedDraws = await withRetry(fetchDraws);
       
       setDraws(formattedDraws);
-      console.log('Successfully processed', formattedDraws.length, 'draws');
+      
+      // Categorize draws
+      const myDrawsList = formattedDraws.filter(draw => 
+        draw.account.creator && draw.account.creator.equals(publicKey)
+      );
+      
+      const joinedDrawsList = formattedDraws.filter(draw => 
+        draw.account.creator && 
+        !draw.account.creator.equals(publicKey) && 
+        draw.account.participants?.some((p: PublicKey) => p.equals(publicKey))
+      );
+      
+      const availableDrawsList = formattedDraws.filter(draw => {
+        const isMyDraw = draw.account.creator && draw.account.creator.equals(publicKey);
+        const hasJoined = draw.account.participants?.some((p: PublicKey) => p.equals(publicKey));
+        return !isMyDraw && !hasJoined && draw.account.isActive === true;
+      });
+      
+      setMyDraws(myDrawsList);
+      setJoinedDraws(joinedDrawsList);
+      setAvailableDraws(availableDrawsList);
       
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Failed to fetch draws';
-      console.error('Error in fetchDraws:', errorMessage, err);
-      setError(`Error: ${errorMessage}. Please check the console for more details.`);
+      console.error('Error fetching draws:', err);
+      setError('Failed to fetch draws. The Solana network might be experiencing high traffic. Please try again.');
     } finally {
-      clearTimeout(timeout);
       setIsLoading(false);
     }
-  }, [program, publicKey, connection, setError, setIsLoading, setDraws]);
+  }, [program, publicKey, connection]);
 
-  const createDraw = useCallback(async (data: CreateDrawData) => {
-    if (!publicKey || !connection) {
+  // Define createDraw
+  const createDraw = useCallback(async (data: CreateDrawData): Promise<string> => {
+    if (!program || !publicKey || !wallet || !sendTransaction) {
       throw new Error('Wallet not connected');
     }
 
-    setIsLoading(true);
-    setError(null);
-
     try {
-      // TODO: Implement create draw transaction
-      // This is a placeholder - replace with actual program interaction
-      console.log('Creating draw:', data);
+      setIsLoading(true);
+      setError(null);
       
-      // After successful creation, refresh the draws list
-      await fetchDraws();
+      // Generate a new keypair for the draw account
+      const drawAccount = Keypair.generate();
+      
+      // Convert SOL to lamports
+      const ticketPriceInLamports = Math.floor(data.ticketPrice * 1e9);
+      
+      // Get the latest blockhash
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+      
+      // Create the instruction to initialize the draw account
+      const tx = await program.methods
+        .initialize(
+          data.name || 'Untitled Draw',
+          data.description || '',
+          new BN(ticketPriceInLamports),
+          new BN(data.maxParticipants || 100) // Default to 100 if not provided
+        )
+        .accounts({
+          drawAccount: drawAccount.publicKey,
+          user: publicKey,
+          systemProgram: SystemProgram.programId,
+          rent: SYSVAR_RENT_PUBKEY,
+        })
+        .signers([drawAccount])
+        .transaction();
+      
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = publicKey;
+      
+      // Sign and send the transaction
+      const signedTx = await wallet.signTransaction(tx);
+      const signature = await connection.sendRawTransaction(signedTx.serialize());
+      
+      // Confirm the transaction
+      await connection.confirmTransaction({
+        signature,
+        blockhash,
+        lastValidBlockHeight,
+      });
+      
+      // Refresh the draws list
+      await refreshDraws();
+      
+      return signature;
+      
     } catch (err) {
-      console.error('Failed to create draw:', err);
-      setError('Failed to create draw');
-      throw err;
+      console.error('Error creating draw:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to create draw';
+      setError(errorMessage);
+      throw new Error(errorMessage);
     } finally {
       setIsLoading(false);
     }
-  }, [connection, publicKey, fetchDraws]);
+  }, [program, publicKey, wallet, sendTransaction, connection, refreshDraws]);
 
   const joinDraw = useCallback(async (data: JoinDrawData) => {
-    if (!publicKey || !connection) {
+    if (!program || !publicKey || !wallet || !sendTransaction) {
       throw new Error('Wallet not connected');
     }
 
-    setIsLoading(true);
-    setError(null);
-
     try {
-      // TODO: Implement join draw transaction
-      console.log('Joining draw:', data);
+      setIsLoading(true);
+      setError(null);
       
-      // After successful join, refresh the draws list
-      await fetchDraws();
+      const drawPubkey = new PublicKey(data.drawAddress);
+      
+      // Get the latest blockhash
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+      
+      // Create the transaction
+      const tx = await program.methods
+        .join()
+        .accounts({
+          drawAccount: drawPubkey,
+          user: publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .transaction();
+      
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = publicKey;
+      
+      // Sign and send the transaction
+      const signedTx = await wallet.signTransaction(tx);
+      const signature = await connection.sendRawTransaction(signedTx.serialize());
+      
+      // Confirm the transaction
+      await connection.confirmTransaction({
+        signature,
+        blockhash,
+        lastValidBlockHeight,
+      });
+      
+      // Refresh the draws list
+      await refreshDraws();
+      
     } catch (err) {
-      console.error('Failed to join draw:', err);
-      setError('Failed to join draw');
-      throw err;
+      console.error('Error joining draw:', err);
+      const errorMessage = err instanceof Error ? err.message : 'Failed to join draw';
+      setError(errorMessage);
+      throw new Error(errorMessage);
     } finally {
       setIsLoading(false);
     }
-  }, [connection, publicKey, fetchDraws]);
+  }, [program, publicKey, wallet, sendTransaction, connection, refreshDraws]);
 
   const pickWinner = useCallback(async (drawAddress: string) => {
     if (!publicKey || !connection) {
@@ -261,7 +340,7 @@ export const DrawProvider: React.FC<{ children: React.ReactNode }> = ({ children
       console.log('Picking winner for draw:', drawAddress);
       
       // After picking winner, refresh the draws list
-      await fetchDraws();
+      await refreshDraws();
     } catch (err) {
       console.error('Failed to pick winner:', err);
       setError('Failed to pick winner');
@@ -269,18 +348,27 @@ export const DrawProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } finally {
       setIsLoading(false);
     }
-  }, [connection, publicKey, fetchDraws]);
+  }, [connection, publicKey, refreshDraws]);
+
+  // Alias refreshDraws as fetchDraws for backward compatibility
+  const fetchDraws = useCallback(async () => {
+    return refreshDraws();
+  }, [refreshDraws]);
 
   return (
     <DrawContext.Provider
       value={{
         draws,
+        myDraws,
+        joinedDraws,
+        availableDraws,
         isLoading,
         error,
         createDraw,
         joinDraw,
         pickWinner,
         fetchDraws,
+        refreshDraws,
       }}
     >
       {children}

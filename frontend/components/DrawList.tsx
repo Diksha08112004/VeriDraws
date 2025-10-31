@@ -1,16 +1,118 @@
-import { Box, Button, Card, CardBody, CardFooter, Divider, Heading, SimpleGrid, Stack, Text, useToast } from '@chakra-ui/react';
+import { Box, Button, Card, CardBody, CardFooter, Divider, Heading, SimpleGrid, Stack, Tab, TabList, TabPanel, TabPanels, Tabs, Text, useToast, VStack, HStack, Badge } from '@chakra-ui/react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { useCallback } from 'react';
 import { useDraw } from '@/contexts/DrawContext';
+import { FiAward, FiUsers, FiPlusCircle, FiClock, FiDollarSign } from 'react-icons/fi';
+
+const DrawCard = ({ draw, onJoinDraw, onPickWinner, isOwner = false }: { 
+  draw: any; 
+  onJoinDraw: (draw: any) => Promise<void>; 
+  onPickWinner: (drawAddress: string) => Promise<void>;
+  isOwner?: boolean;
+}) => {
+  const ticketPriceSol = draw.account.ticketPrice / 1e9; // Convert lamports to SOL
+  const participantsCount = draw.account.participants?.length || 0;
+  
+  return (
+    <Card key={draw.publicKey} variant="outline" _hover={{ transform: 'translateY(-4px)', shadow: 'md' }} transition="all 0.2s">
+      <CardBody>
+        <Stack spacing={3}>
+          <HStack justify="space-between" align="start">
+            <Heading size="md">{draw.account.name || 'Untitled Draw'}</Heading>
+            {isOwner && (
+              <Badge colorScheme="purple" px={2} py={1} borderRadius="md">
+                Your Draw
+              </Badge>
+            )}
+          </HStack>
+          
+          <Text color="gray.600" noOfLines={2}>
+            {draw.account.description || 'No description provided'}
+          </Text>
+          
+          <Divider my={2} />
+          
+          <VStack align="start" spacing={1}>
+            <HStack>
+              <FiDollarSign />
+              <Text>Ticket Price: {ticketPriceSol} SOL</Text>
+            </HStack>
+            <HStack>
+              <FiUsers />
+              <Text>{participantsCount} / {draw.account.maxParticipants || '∞'} Participants</Text>
+            </HStack>
+            <HStack>
+              <FiClock />
+              <Text>Created: {new Date(draw.account.createdAt * 1000).toLocaleDateString()}</Text>
+            </HStack>
+            {draw.account.winner && (
+              <HStack color="green.500">
+                <FiAward />
+                <Text>Winner: {draw.account.winner.toString().substring(0, 4)}...{draw.account.winner.toString().substring(draw.account.winner.toString().length - 4)}</Text>
+              </HStack>
+            )}
+          </VStack>
+        </Stack>
+      </CardBody>
+      <Divider />
+      <CardFooter>
+        <HStack spacing={4} w="full">
+          {!isOwner && draw.account.isActive && (
+            <Button
+              colorScheme="blue"
+              flex={1}
+              onClick={() => onJoinDraw(draw)}
+              isLoading={false}
+              loadingText="Joining..."
+            >
+              Join for {ticketPriceSol} SOL
+            </Button>
+          )}
+          {isOwner && draw.account.isActive && (
+            <Button
+              colorScheme="green"
+              flex={1}
+              onClick={() => onPickWinner(draw.publicKey)}
+              isLoading={false}
+              loadingText="Picking..."
+              leftIcon={<FiAward />}
+            >
+              Pick Winner
+            </Button>
+          )}
+          {!draw.account.isActive && (
+            <Text color="gray.500" textAlign="center" w="full">
+              This draw has ended
+            </Text>
+          )}
+        </HStack>
+      </CardFooter>
+    </Card>
+  );
+};
 
 export default function DrawList() {
-  const { draws, isLoading, error, joinDraw, pickWinner, fetchDraws } = useDraw();
+  const { 
+    draws, 
+    myDraws, 
+    joinedDraws, 
+    availableDraws, 
+    isLoading, 
+    error, 
+    joinDraw, 
+    pickWinner, 
+    fetchDraws 
+  } = useDraw();
+  
   const { publicKey } = useWallet();
   const toast = useToast();
   
   // Debug info
-  console.log('DrawList - Draws:', draws);
+  console.log('DrawList - My Draws:', myDraws);
+  console.log('DrawList - Joined Draws:', joinedDraws);
+  console.log('DrawList - Available Draws:', availableDraws);
+  console.log('DrawList - All Draws:', draws);
   console.log('DrawList - Loading:', isLoading);
   console.log('DrawList - Error:', error);
 
